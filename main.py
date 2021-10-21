@@ -2,13 +2,16 @@
 Description:A Demo of Yolov5 Armor Detect
 Date:2021.09.10
 '''
-import numpy
-import params
-import torch
 import numpy as np
-import onnxruntime as rt
-import params
+
+import torch
+
 import cv2
+
+import onnxruntime as rt
+
+import params
+
 
 def resize(img,size):
     height_src, width_src = img.shape[:2]  # origin hw
