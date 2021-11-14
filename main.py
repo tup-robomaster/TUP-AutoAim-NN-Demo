@@ -1,34 +1,31 @@
 '''
-Description:A Demo of Yolov5 Armor Detect
+Description:A Demo of Yolox Armor Detect
 Date:2021.09.10
 '''
-import numpy as np
-
-import torch
-
-import cv2
-
-import onnxruntime as rt
-
+import numpy
 import params
-
+import torch
+import numpy as np
+import onnxruntime as rt
+import params
+import cv2
 
 def resize(img,size):
     height_src, width_src = img.shape[:2]  # origin hw
-    # print("%d * % d" % (height_src,width_src))
-    resize_factor_x = size[2] / width_src  # resize image to img_size
-    resize_factor_y = size[1] / height_src  # resize image to img_size
+    resize_factor_x = size[3] / width_src  # resize image to img_size
+    resize_factor_y = size[2] / height_src  # resize image to img_size
     resize_factor = min(resize_factor_x, resize_factor_y)
-    dst = cv2.resize(img, (int(width_src * resize_factor_x), int(height_src * resize_factor_y)), interpolation=cv2.INTER_LINEAR)
-    # dst = cv2.copyMakeBorder(dst, int(height_src * (1 - resize_factor_y) * 0.5),
-    #                         int(height_src * (1 - resize_factor_y) * 0.5),
-    #                         int(width_src * (1 - resize_factor_x) * 0.5),
-    #                         int(width_src * (1 - resize_factor_x) * 0.5),
-    #                         cv2.BORDER_CONSTANT,
-    #                         (0,0,0))
-    resize_matrix = np.array([[1 / resize_factor_x, 0], [0, 1 / resize_factor_y]])
-    dst = cv2.cvtColor(dst,cv2.COLOR_BGR2RGB,dst)
-    return resize_matrix, dst
+    dst = cv2.resize(img, (int(width_src * resize_factor), int(height_src * resize_factor)), interpolation=cv2.INTER_LINEAR)
+    dst = cv2.copyMakeBorder(dst, int(height_src * (resize_factor_y - resize_factor) * 0.5),
+                            int(height_src * (resize_factor_y - resize_factor) * 0.5),
+                            int(width_src * (resize_factor_x - resize_factor) * 0.5 + 1),
+                            int(width_src * (resize_factor_x - resize_factor) * 0.5 + 1),
+                            cv2.BORDER_CONSTANT,
+                            (0,0,0))
+    resize_matrix = np.array([[1 / resize_factor, 0], [0, 1 / resize_factor]])
+    resize_vector = np.array([int(width_src * (resize_factor_x - resize_factor) * 0.5 + 1),
+    				int(height_src * (resize_factor_y - resize_factor) * 0.5)])
+    return resize_matrix, resize_vector, dst
 
 def inv_sigmoid(x):
     y = np.log(1 / x - 1)
@@ -42,8 +39,6 @@ def is_overlapped(bbox_1,bbox_2):
     intersect_br = [min(box_1[0] + box_1[2], box_2[0] + box_2[3]), min(box_1[1] + box_1[3], box_2[1] + box_2[3])]
     # print(bbox_1)
     # print("--------------------------------------------------------")
-    # print(box_1)
-    # print(box_2)
     # print("tl.x: %d \t br.x: %d" % (intersect_tl[0], intersect_br[0]))
     # print("tl.y: %d \t br.y: %d" % (intersect_tl[1], intersect_br[1]))
     # print("dx : %d , dy : %d" % (intersect_tl[0] - intersect_br[0], intersect_tl[1] - intersect_br[1]))
@@ -63,13 +58,13 @@ class BBox:
 
 if __name__ == '__main__':
     #Initialize
-    model_dir = "model-opt-4.onnx"
-    using_cam = True
-    using_video = False
+    model_dir = "yolox.onnx"
+    using_cam = False
+    using_video = True
     detect_color = 0 #0 for blue,1 for red,2 for gray
     TOPK_NUM = 128
-    KEEP_THRES = 0.01
-    video_dir = "sample01.mp4"
+    KEEP_THRES = 0.1
+    video_dir = "sample01.mp4"		
     pred = []
     # Create Inference Session
     sess = rt.InferenceSession(model_dir)
@@ -92,12 +87,12 @@ if __name__ == '__main__':
         target_list = []
         final_target_list = []
         #Resize the image
-        resize_matrix, img = resize(src,input.shape)
-        print(input.shape)
+        resize_matrix, resize_vector, img = resize(src,input.shape)
         cv2.imshow("src", src)
         cv2.waitKey(1)
         img_pre = np.expand_dims(img, axis=0)
         img_pre = img_pre.astype(np.float32)
+        img_pre = np.transpose(img_pre, (0, 3, 1, 2))
         pred = sess.run([output.name], {input.name: img_pre})
         pred_tensor = torch.as_tensor(pred[0][0])
         # print(pred_tensor.shape)
@@ -108,23 +103,24 @@ if __name__ == '__main__':
         #post process + NMS
         removed_index = np.zeros([TOPK_NUM])
         for i in range(TOPK_NUM):
-            # print("i:%d" % i)
             pred = final_pred[i]
             tmp_bbox = BBox()
-            # print(tmp_bbox.pts)
-            tmp_bbox.conf = torch.sigmoid(pred[8])
+            tmp_bbox.conf = pred[8]
             if tmp_bbox.conf < KEEP_THRES:
                 break
             if removed_index[i] == 1:
                 continue
             #Setting boundingbox
-            tmp_bbox.pts[0] = np.array(np.matmul([pred[0], pred[1]], resize_matrix), dtype=np.int32)
-            tmp_bbox.pts[1] = np.array(np.matmul([pred[2], pred[3]], resize_matrix), dtype=np.int32)
-            tmp_bbox.pts[2] = np.array(np.matmul([pred[4], pred[5]], resize_matrix), dtype=np.int32)
-            tmp_bbox.pts[3] = np.array(np.matmul([pred[6], pred[7]], resize_matrix), dtype=np.int32)
+            tmp_bbox.pts[0] = np.array(np.matmul((pred[0:2] - resize_vector), resize_matrix), dtype=np.int32)
+            tmp_bbox.pts[1] = np.array(np.matmul((pred[2:4] - resize_vector), resize_matrix), dtype=np.int32)
+            tmp_bbox.pts[2] = np.array(np.matmul((pred[4:6] - resize_vector), resize_matrix), dtype=np.int32)
+            tmp_bbox.pts[3] = np.array(np.matmul((pred[6:8] - resize_vector), resize_matrix), dtype=np.int32)
+            #print(pred[0:8])
+            #for i in range(4):
+            		#cv2.line(src, tuple(tmp_bbox.pts[i % 4]), tuple(tmp_bbox.pts[(i + 1) % 4]), (255,0,0))
 
             tmp_bbox.color = int(torch.argmax(pred[9:12]))
-            tmp_bbox.id = int(torch.argmax(pred[13:19]))
+            tmp_bbox.id = int(torch.argmax(pred[12:]))
 
             # print("i ", i, "\n", tmp_bbox.pts[0][0])
             for j in range (i + 1, TOPK_NUM):
@@ -138,11 +134,10 @@ if __name__ == '__main__':
                     break
                 if removed_index[j] == 1:
                     continue
-                tmp_bbox_j.pts[0] = np.array(np.matmul([pred_j[0], pred_j[1]], resize_matrix), dtype=np.int32)
-                tmp_bbox_j.pts[1] = np.array(np.matmul([pred_j[2], pred_j[3]], resize_matrix), dtype=np.int32)
-                tmp_bbox_j.pts[2] = np.array(np.matmul([pred_j[4], pred_j[5]], resize_matrix), dtype=np.int32)
-                tmp_bbox_j.pts[3] = np.array(np.matmul([pred_j[6], pred_j[7]], resize_matrix), dtype=np.int32)
-
+                tmp_bbox_j.pts[0] = np.array(np.matmul(pred_j[0:2], resize_matrix) - resize_vector, dtype=np.int32)
+                tmp_bbox_j.pts[1] = np.array(np.matmul(pred_j[2:4], resize_matrix) - resize_vector, dtype=np.int32)
+                tmp_bbox_j.pts[2] = np.array(np.matmul(pred_j[4:6], resize_matrix) - resize_vector, dtype=np.int32)
+                tmp_bbox_j.pts[3] = np.array(np.matmul(pred_j[6:8], resize_matrix) - resize_vector, dtype=np.int32)
                 if is_overlapped(tmp_bbox.pts, tmp_bbox_j.pts):
                     removed_index[j] = True
                     continue
@@ -168,15 +163,16 @@ if __name__ == '__main__':
                 a_x = np.arctan2(rmat[2][1], rmat[2][2]) * 180 / np.pi
                 a_y = np.arctan2(-rmat[2][0], np.sqrt(np.square(rmat[2][1]) + np.square(rmat[2][2]))) * 180 / np.pi
                 a_z = np.arctan2(rmat[1][0], rmat[0][0]) * 180 / np.pi
-                print(a_x)
-                print(a_y)
-                print(a_z)
-                print("\n")
+                #print(a_x)
+                #print(a_y)
+                #print(a_z)
+                print(target.conf)
+                #print("\n")
                 dist = int(np.sqrt(np.square(tvec[0]) + np.square(tvec[1]) + np.square(tvec[2])))
 
                 if target.color == 1:
                     color = (0, 0, 255)
-                elif target.color == 0:
+                else:
                     color = (255, 0, 0)
                 # color = (0, 255, 0)
 
